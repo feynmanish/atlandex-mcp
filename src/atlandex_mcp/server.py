@@ -53,8 +53,8 @@ INSTRUCTIONS = (
     "it. Typical flow: find_videos with a short term to see which indexed "
     "videos cover a topic; search_video, on videos marked searchable, with the user's question to "
     "read the relevant passages; then answer with each claim linked to the exact youtube_url of the "
-    "passage it comes from (copy it whole, including &t=...s; never shorten it to the plain video "
-    "link). Say what the passages do not cover instead of filling the gap from memory. "
+    "passage it comes from (copy it whole, including &t=...s; a passage with a start_sec always gets "
+    "its timestamped link, and only a passage whose start_sec is null gets the plain video link). Say what the passages do not cover instead of filling the gap from memory. "
     "For videos that are not searchable, say their text cannot be read and cite the chapter link "
     "from find_videos (call it with a topic term from the question if you do not have one). "
     "Passages are speech-to-text: attribute them to the video and quote briefly."
@@ -280,7 +280,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> SearchVideoResult:
         """Search one indexed video's transcript for the passages that answer a question, each with a link to the moment it is said.
 
-        Passages are ranked by semantic similarity to the question. Cite the youtube_url of every passage you rely on. A passage with no start_sec could not be located in the captions; cite the plain video link for it. Works only on videos with a searchable transcript (find_videos marks them searchable). If it says a video has no searchable transcript, do not retry it: cite the chapter link or use locate_quote.
+        Passages are ranked by semantic similarity to the question. Cite the youtube_url of every passage you rely on, whole and with its &t=...s whenever the passage has a start_sec. Only a passage with no start_sec (it could not be located in the captions) gets the plain video link. Works only on videos with a searchable transcript (find_videos marks them searchable). If it says a video has no searchable transcript, do not retry it: cite the chapter link or use locate_quote.
         """
         video_id = _video_id(video)
         question = " ".join(question.split())
