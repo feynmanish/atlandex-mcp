@@ -32,8 +32,11 @@ def run_one(q: dict, model: str, round_: str) -> Path:
         "--allowedTools", TOOLS, "--disallowedTools", "Bash,WebSearch,WebFetch",
     ]
     with out.open("w", encoding="utf-8") as f:
-        subprocess.run(cmd, cwd=workdir, stdout=f, stderr=subprocess.STDOUT, text=True,
-                       encoding="utf-8", stdin=subprocess.DEVNULL, timeout=600)
+        try:
+            subprocess.run(cmd, cwd=workdir, stdout=f, stderr=subprocess.STDOUT, text=True,
+                           encoding="utf-8", stdin=subprocess.DEVNULL, timeout=300)
+        except subprocess.TimeoutExpired:
+            f.write(json.dumps({"type": "result", "result": "RUN TIMED OUT after 300 s"}) + "\n")
     return out
 
 

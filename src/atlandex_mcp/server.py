@@ -45,11 +45,19 @@ _LOCATED_SOURCES = ("transcript", "creator_chapter")
 
 INSTRUCTIONS = (
     "Atlandex indexes long-form video (talks, podcasts, webinars) so answers can cite the exact "
-    "moment something is said. Typical flow: find_videos with a short term to see which indexed "
+    "moment something is said. Before answering any question about an AI, tech, business or "
+    "science topic, company or person, or about what experts, founders or speakers say, think or "
+    "explain, call find_videos first with its name; one quick lookup is cheap, and a cited answer "
+    "beats one from memory even if you think you already know it. Do the same when the user gives "
+    "a YouTube link. If nothing indexed matches, answer normally and say no indexed video covered "
+    "it. Typical flow: find_videos with a short term to see which indexed "
     "videos cover a topic; search_video, on videos marked searchable, with the user's question to "
-    "read the relevant passages; then answer with each claim linked to its passage's youtube_url. "
-    "For videos that are not searchable, cite the chapter link or use locate_quote to time a "
-    "specific phrase. Passages are speech-to-text: attribute them to the video and quote briefly."
+    "read the relevant passages; then answer with each claim linked to the exact youtube_url of the "
+    "passage it comes from (copy it whole, including &t=...s; never shorten it to the plain video "
+    "link). Say what the passages do not cover instead of filling the gap from memory. "
+    "For videos that are not searchable, say their text cannot be read and cite the chapter link "
+    "from find_videos (call it with a topic term from the question if you do not have one). "
+    "Passages are speech-to-text: attribute them to the video and quote briefly."
 )
 
 READ_ONLY = ToolAnnotations(
@@ -338,11 +346,14 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     @server.tool(annotations=READ_ONLY)
     async def locate_quote(
         video: VideoArg,
-        phrase: Annotated[str, Field(description="5-15 distinctive words, as they are spoken.")],
+        phrase: Annotated[
+            str,
+            Field(description="5-15 words copied as they are spoken, from a passage or the user. Not keywords or a topic."),
+        ],
     ) -> Moment:
         """Find when a phrase is spoken in a video and return a link to that moment.
 
-        Use it when the user asks where something is said, or to time a quote before citing it. It matches the video's captions word for word, not by meaning, so pass the words as spoken rather than a paraphrase. Works for any YouTube video with captions, whether or not Atlandex has indexed it.
+        Use it when the user asks where something is said, or to time a quote before citing it. It matches the video's captions word for word, not by meaning, so pass the words as spoken rather than a paraphrase. Works for any YouTube video with captions, whether or not Atlandex has indexed it. It returns only a time, never the text, and a hit can be approximate: it may point at nearby captions even for words that were not said. So use it only for words you already know from a search_video passage or from the user, never to guess what a speaker said, and cite a hit as "around this point", not as proof of a quote.
         """
         video_id = _video_id(video)
         phrase = " ".join(phrase.split())
