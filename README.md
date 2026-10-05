@@ -6,11 +6,13 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI agents search the 
 
 | Tool | What it returns | Atlandex route |
 |---|---|---|
-| `find_videos(term, limit, channel_id)` | Indexed videos where a concept, person or technology comes up, with the chapter and time, and a `searchable` flag saying whether `search_video` can read the video | `GET /api/term/<term>`, then `GET /api/yt_videos/<id>/embeddings_ready` per video |
-| `search_video(video, question, top_k)` | The passages of one video that answer a question, each with a timestamped link | `POST /api/yt_videos/<id>/query`, then `POST /api/snippet-seek` per passage |
-| `locate_quote(video, phrase)` | When a phrase is spoken, as a timestamped link | `POST /api/snippet-seek` |
+| `find_videos(term, limit, channel_id)` | Indexed videos where a concept, person or technology comes up, with the chapter and time, a `searchable` flag saying whether `search_video` can read the video, and a ready-made `citation` link | `GET /api/term/<term>`, then `GET /api/yt_videos/<id>/embeddings_ready` per video |
+| `search_video(video, question, top_k)` | The passages of one video that answer a question, each with a timestamped link and a ready-made `citation` | `POST /api/yt_videos/<id>/query`, then `POST /api/snippet-seek` per passage |
+| `locate_quote(video, phrase)` | When a phrase is spoken, as a timestamped link and a ready-made `citation` | `POST /api/snippet-seek` |
 
 `video` accepts a YouTube URL, an Atlandex `/v/` link or a bare video ID. All three tools are read-only.
+
+Every passage, video hit and moment carries a `citation`: a markdown link built from the same values as `youtube_url`, `[<title or video ID>, <m:ss>](<url>&t=<n>s)` when the start time is known and `[<title or video ID>](<url>)` when it is not. The agent copies it verbatim instead of assembling links, so the timestamp rule lives in the server and not in the model's wording.
 
 `searchable` is `true` when the video has transcript embeddings, `false` when it is in the term index but has no searchable transcript, and `null` when the check failed. For `false` videos the agent cites the chapter link or uses `locate_quote`.
 
@@ -37,7 +39,8 @@ Each hit costs the agent about 1,000 characters of context instead of the 8,000 
       "timestamp": "10:57",
       "located_by": "transcript",
       "youtube_url": "https://www.youtube.com/watch?v=AbCdEfGhIjK&t=657s",
-      "atlandex_url": "https://www.atlandex.app/v/AbCdEfGhIjK?t=657"
+      "atlandex_url": "https://www.atlandex.app/v/AbCdEfGhIjK?t=657",
+      "citation": "[Searching long videos, 10:57](https://www.youtube.com/watch?v=AbCdEfGhIjK&t=657s)"
     }
   ]
 }
@@ -102,7 +105,7 @@ Run ten real questions through Claude Code and look for:
 
 1. **Tool choice.** For topic questions, the agent should start with `find_videos`. Given a video, it should go straight to `search_video`.
 2. **Search terms.** Short terms find matches. Whole questions passed to `find_videos` return nothing.
-3. **Citations.** Every claim should carry a `youtube_url`. When `start_sec` is null, the link should have no timestamp.
+3. **Citations.** Every claim should carry a `citation`, copied verbatim. When `start_sec` is null, the link has no timestamp.
 4. **Timestamp accuracy.** Open three links and note how far before the line each one lands (see limits below).
 5. **Recovery.** Ask `search_video` about a video with no searchable transcript. The agent should not retry it, and should cite the chapter link or use `locate_quote`.
 6. **Searchable flag.** `find_videos` results marked `searchable: false` should not be passed to `search_video`.

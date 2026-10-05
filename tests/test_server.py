@@ -84,6 +84,10 @@ async def test_search_video_returns_passages_located_in_the_captions():
     assert first["located_by"] == "transcript"
     assert first["youtube_url"] == f"https://www.youtube.com/watch?v={VIDEO_ID}&t={start}s"
     assert first["atlandex_url"] == f"https://www.atlandex.app/v/{VIDEO_ID}?t={start}"
+    assert first["citation"] == (
+        f"[Searching long videos, {format_timestamp(start)}]"
+        f"(https://www.youtube.com/watch?v={VIDEO_ID}&t={start}s)"
+    )
     assert first["distance"] == pytest.approx(0.42)
     assert [p["rank"] for p in data["passages"]] == [1, 2]
     assert data["title"] == "Searching long videos"
@@ -113,8 +117,10 @@ async def test_search_still_answers_when_captions_cannot_be_read():
     assert data["passages"]
     assert all(p["start_sec"] is None for p in data["passages"])
     assert all(p["youtube_url"] == f"https://www.youtube.com/watch?v={VIDEO_ID}" for p in data["passages"])
-    assert "plain video link" in data["note"]
+    assert "no timestamp" in data["note"]
     assert data["title"] is None
+    # no title and no timestamp: the video ID is the label and the link is the plain one
+    assert all(p["citation"] == f"[{VIDEO_ID}](https://www.youtube.com/watch?v={VIDEO_ID})" for p in data["passages"])
 
 
 async def test_unmatched_passage_has_no_timestamp_but_others_keep_theirs():
@@ -124,6 +130,8 @@ async def test_unmatched_passage_has_no_timestamp_but_others_keep_theirs():
     located, unlocated = data["passages"]
     assert located["start_sec"] is not None
     assert unlocated["start_sec"] is None and unlocated["located_by"] is None
+    assert located["citation"].startswith("[Searching long videos, ") and "&t=" in located["citation"]
+    assert unlocated["citation"] == f"[Searching long videos](https://www.youtube.com/watch?v={VIDEO_ID})"
     assert data["note"] is not None
 
 
@@ -226,6 +234,7 @@ async def test_find_videos_returns_timestamped_hits():
     second = data["videos"][1]
     assert (second["relevance"], second["chapter_title"], second["timestamp"]) == (800, "Fusion", "1:02:05")
     assert second["youtube_url"] == "https://www.youtube.com/watch?v=ZyXwVuTsRqP&t=3725s"
+    assert second["citation"] == "[Hybrid search in practice, 1:02:05](https://www.youtube.com/watch?v=ZyXwVuTsRqP&t=3725s)"
     assert data["hint"] is None
 
 
@@ -263,6 +272,7 @@ async def test_find_videos_handles_rows_without_a_chapter():
     third = data["videos"][2]
     assert third["start_sec"] is None and third["timestamp"] is None
     assert third["youtube_url"] == "https://www.youtube.com/watch?v=MnOpQrStUvW"
+    assert third["citation"] == "[Retrieval basics](https://www.youtube.com/watch?v=MnOpQrStUvW)"
 
 
 async def test_find_videos_can_scope_to_a_channel():
@@ -289,6 +299,10 @@ async def test_locate_quote_finds_the_moment():
     assert data["found"] is True
     assert data["start_sec"] == start
     assert data["youtube_url"] == f"https://www.youtube.com/watch?v={VIDEO_ID}&t={start}s"
+    assert data["citation"] == (
+        f"[Searching long videos, {format_timestamp(start)}]"
+        f"(https://www.youtube.com/watch?v={VIDEO_ID}&t={start}s)"
+    )
     assert json.loads(fake.requests[0].content) == {"video_id": VIDEO_ID, "query": phrase}
 
 
@@ -298,6 +312,7 @@ async def test_locate_quote_not_found_returns_a_hint():
     ).structured_content
     assert data["found"] is False and data["start_sec"] is None
     assert data["youtube_url"] == f"https://www.youtube.com/watch?v={VIDEO_ID}"
+    assert data["citation"] == f"[Searching long videos](https://www.youtube.com/watch?v={VIDEO_ID})"
     assert "fewer" in data["hint"]
 
 

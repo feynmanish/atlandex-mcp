@@ -37,7 +37,7 @@ from .atlandex_api import (
 from .config import ConfigError, Settings
 from .models import FindVideosResult, Moment, Passage, SearchVideoResult, VideoHit
 from .passages import select_passage
-from .youtube import atlandex_url, extract_video_id, format_timestamp, youtube_url
+from .youtube import atlandex_url, citation, extract_video_id, format_timestamp, youtube_url
 
 MAX_TOP_K = 5
 MAX_VIDEOS = 25
@@ -50,13 +50,13 @@ INSTRUCTIONS = (
     "explain, call find_videos first with its name; one quick lookup is cheap, and a cited answer "
     "beats one from memory even if you think you already know it. Do the same when the user gives "
     "a YouTube link. If nothing indexed matches, answer normally and say no indexed video covered "
-    "it. Typical flow: find_videos with a short term to see which indexed "
-    "videos cover a topic; search_video, on videos marked searchable, with the user's question to "
-    "read the relevant passages; then answer with each claim linked to the exact youtube_url of the "
-    "passage it comes from (copy it whole, including &t=...s; a passage with a start_sec always gets "
-    "its timestamped link, and only a passage whose start_sec is null gets the plain video link). Say what the passages do not cover instead of filling the gap from memory. "
-    "For videos that are not searchable, say their text cannot be read and cite the chapter link "
-    "from find_videos (call it with a topic term from the question if you do not have one). "
+    "it. Typical flow: find_videos with a short term to see which indexed videos cover a topic; "
+    "search_video, on videos marked searchable, with the user's question to read the relevant "
+    "passages; then answer. Cite every claim by copying the passage's `citation` verbatim; never "
+    "build or edit a link yourself. A sentence that draws on several passages cites each of them. "
+    "Say what the passages do not cover instead of filling the gap from memory. "
+    "For videos that are not searchable, say their text cannot be read and cite the chapter "
+    "`citation` from find_videos (call it with a topic term from the question if you do not have one). "
     "Passages are speech-to-text: attribute them to the video and quote briefly."
 )
 
@@ -194,12 +194,13 @@ def _float_or_none(value: Any) -> float | None:
 
 def _video_hit(row: dict[str, Any], site_url: str, searchable: bool | None) -> VideoHit:
     video_id = str(row["videoid"])
+    title = _clean(row.get("title")) or video_id
     start = _int_or_none(row.get("seconds"))
     if start is not None:
         start = max(0, start)
     return VideoHit(
         video_id=video_id,
-        title=_clean(row.get("title")) or video_id,
+        title=title,
         channel=_clean(row.get("channel_title")),
         relevance=_int_or_none(row.get("term_relevance")),
         chapter_title=_clean(row.get("chapter_title")),
@@ -208,6 +209,7 @@ def _video_hit(row: dict[str, Any], site_url: str, searchable: bool | None) -> V
         searchable=searchable,
         youtube_url=youtube_url(video_id, start),
         atlandex_url=atlandex_url(site_url, video_id, start),
+        citation=citation(video_id, title, start),
     )
 
 
@@ -244,7 +246,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> FindVideosResult:
         """Find indexed videos where a named concept, person, product or technology comes up, with the chapter and time where it is discussed.
 
-        Matches Atlandex's extracted index terms exactly (case-insensitive), so pass a short canonical term such as "reinforcement learning" or "Nvidia", never a question or a sentence. Punctuation counts: "self-supervised learning" and "self supervised learning" are different terms. If nothing matches, retry once with a shorter, more common or differently hyphenated form, then say nothing indexed covers it. Each video has a searchable flag: call search_video only on videos where it is true, to read what is actually said. For the others (false) cite the chapter link or use locate_quote; null means the check failed, so try search_video once.
+        Matches Atlandex's extracted index terms exactly (case-insensitive), so pass a short canonical term such as "reinforcement learning" or "Nvidia", never a question or a sentence. Punctuation counts: "self-supervised learning" and "self supervised learning" are different terms. If nothing matches, retry once with a shorter, more common or differently hyphenated form, then say nothing indexed covers it. Each video has a searchable flag: call search_video only on videos where it is true, to read what is actually said. For the others (false) cite the chapter link or use locate_quote; null means the check failed, so try search_video once. To cite a chapter, copy the video's `citation` verbatim.
         """
         term = " ".join(term.split())
         if not term:
@@ -280,7 +282,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> SearchVideoResult:
         """Search one indexed video's transcript for the passages that answer a question, each with a link to the moment it is said.
 
-        Passages are ranked by semantic similarity to the question. Cite the youtube_url of every passage you rely on, whole and with its &t=...s whenever the passage has a start_sec. Only a passage with no start_sec (it could not be located in the captions) gets the plain video link. Works only on videos with a searchable transcript (find_videos marks them searchable). If it says a video has no searchable transcript, do not retry it: cite the chapter link or use locate_quote.
+        Passages are ranked by semantic similarity to the question. Cite every claim by copying the passage's `citation` verbatim; never build or edit a link yourself. A sentence that draws on several passages cites each of them. Works only on videos with a searchable transcript (find_videos marks them searchable). If it says a video has no searchable transcript, do not retry it: cite the chapter link or use locate_quote.
         """
         video_id = _video_id(video)
         question = " ".join(question.split())
@@ -309,10 +311,11 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
         seeks = await asyncio.gather(*(_seek_or_none(api, video_id, s.anchor) for s in selections))
 
         title = channel = None
-        passages: list[Passage] = []
-        for position, (chunk, selection, seek) in enumerate(zip(chunks, selections, seeks), start=1):
+        for seek in seeks:
             if seek is not None and title is None:
                 title, channel = seek.title, seek.channel
+        passages: list[Passage] = []
+        for position, (chunk, selection, seek) in enumerate(zip(chunks, selections, seeks), start=1):
             start = seek.start_sec if seek is not None else None
             passages.append(
                 Passage(
@@ -324,6 +327,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
                     located_by=seek.located_by if seek is not None else None,
                     youtube_url=youtube_url(video_id, start),
                     atlandex_url=atlandex_url(settings.site_url, video_id, start),
+                    citation=citation(video_id, title, start),
                 )
             )
 
@@ -331,7 +335,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
         if not passages:
             note = "The video is indexed, but no passage came back for this question."
         elif any(p.start_sec is None for p in passages):
-            note = "Some passages could not be located in the captions; cite those with the plain video link."
+            note = "Some passages could not be located in the captions; their citation has no timestamp."
 
         return SearchVideoResult(
             video_id=video_id,
@@ -353,7 +357,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> Moment:
         """Find when a phrase is spoken in a video and return a link to that moment.
 
-        Use it when the user asks where something is said, or to time a quote before citing it. It matches the video's captions word for word, not by meaning, so pass the words as spoken rather than a paraphrase. Works for any YouTube video with captions, whether or not Atlandex has indexed it. It returns only a time, never the text, and a hit can be approximate: it may point at nearby captions even for words that were not said. So use it only for words you already know from a search_video passage or from the user, never to guess what a speaker said, and cite a hit as "around this point", not as proof of a quote.
+        Use it when the user asks where something is said, or to time a quote before citing it. It matches the video's captions word for word, not by meaning, so pass the words as spoken rather than a paraphrase. Works for any YouTube video with captions, whether or not Atlandex has indexed it. It returns only a time, never the text, and a hit can be approximate: it may point at nearby captions even for words that were not said. So use it only for words you already know from a search_video passage or from the user, never to guess what a speaker said, and cite a hit as "around this point" using its `citation` verbatim, not as proof of a quote.
         """
         video_id = _video_id(video)
         phrase = " ".join(phrase.split())
@@ -379,6 +383,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
             channel=seek.channel,
             youtube_url=youtube_url(video_id, seek.start_sec),
             atlandex_url=atlandex_url(settings.site_url, video_id, seek.start_sec),
+            citation=citation(video_id, seek.title, seek.start_sec),
             hint=None
             if found
             else (

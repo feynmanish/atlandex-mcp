@@ -6,6 +6,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+CITATION_DESCRIPTION = (
+    "Markdown link built from youtube_url. Copy it verbatim as the citation; never build or edit a link."
+)
+
 
 class VideoHit(BaseModel):
     video_id: str
@@ -25,6 +29,7 @@ class VideoHit(BaseModel):
     )
     youtube_url: str = Field(description="Link to the video, at start_sec when known.")
     atlandex_url: str = Field(description="Atlandex page for the video, at start_sec when known.")
+    citation: str = Field(description=CITATION_DESCRIPTION)
 
 
 class FindVideosResult(BaseModel):
@@ -47,8 +52,9 @@ class Passage(BaseModel):
     located_by: Literal["transcript", "creator_chapter"] | None = Field(
         default=None, description="How start_sec was found; null when it could not be."
     )
-    youtube_url: str = Field(description="Cite this. Opens the video at start_sec when known.")
+    youtube_url: str = Field(description="Opens the video at start_sec when known.")
     atlandex_url: str = Field(description="Atlandex page for the video, at start_sec when known.")
+    citation: str = Field(description=CITATION_DESCRIPTION)
 
 
 class SearchVideoResult(BaseModel):
@@ -71,4 +77,5 @@ class Moment(BaseModel):
     channel: str | None = None
     youtube_url: str
     atlandex_url: str
+    citation: str = Field(description=CITATION_DESCRIPTION)
     hint: str | None = None

@@ -59,6 +59,18 @@ def youtube_url(video_id: str, start_sec: int | None = None) -> str:
     return base if start_sec is None else f"{base}&t={int(start_sec)}s"
 
 
+def citation(video_id: str, title: str | None, start_sec: int | None = None) -> str:
+    """Ready-made markdown link: '[Title, 1:05](url&t=65s)', or '[Title](url)' without a time.
+
+    Built from the same values as youtube_url, so an agent can paste it instead of assembling a link.
+    """
+    label = " ".join((title or "").split()) or video_id
+    label = label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    if start_sec is not None:
+        label += f", {format_timestamp(start_sec)}"
+    return f"[{label}]({youtube_url(video_id, start_sec)})"
+
+
 def atlandex_url(site_url: str, video_id: str, start_sec: int | None = None) -> str:
     base = f"{site_url.rstrip('/')}/v/{video_id}"
     return base if start_sec is None else f"{base}?t={int(start_sec)}"
