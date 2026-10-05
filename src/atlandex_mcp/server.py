@@ -31,6 +31,7 @@ from .atlandex_api import (
     BackendRejected,
     NotIndexed,
     RateLimited,
+    ServerError,
     Unavailable,
 )
 from .config import ConfigError, Settings
@@ -45,8 +46,9 @@ _LOCATED_SOURCES = ("transcript", "creator_chapter")
 INSTRUCTIONS = (
     "Atlandex indexes long-form video (talks, podcasts, webinars) so answers can cite the exact "
     "moment something is said. Typical flow: find_videos with a short term to see which indexed "
-    "videos cover a topic; search_video with the user's question to read the relevant passages; "
-    "then answer with each claim linked to its passage's youtube_url. Use locate_quote to time a "
+    "videos cover a topic; search_video, on videos marked searchable, with the user's question to "
+    "read the relevant passages; then answer with each claim linked to its passage's youtube_url. "
+    "For videos that are not searchable, cite the chapter link or use locate_quote to time a "
     "specific phrase. Passages are speech-to-text: attribute them to the video and quote briefly."
 )
 
@@ -109,6 +111,14 @@ def _video_id(video: str) -> str:
     return video_id
 
 
+def _no_transcript_message(video_id: str) -> str:
+    return (
+        f"Video {video_id} has no searchable transcript in Atlandex. Do not retry search_video on "
+        "it. Cite the chapter link you already have for it, or use locate_quote to time a "
+        "specific phrase from its captions."
+    )
+
+
 def _agent_message(exc: AtlandexError) -> str:
     if isinstance(exc, RateLimited):
         return (
@@ -144,6 +154,13 @@ def _parse_seek(data: dict[str, Any], video_id: str) -> _Seek:
     )
 
 
+async def _searchable_or_none(api: AtlandexAPI, video_id: str) -> bool | None:
+    try:
+        return await api.embeddings_ready(video_id)
+    except AtlandexError:
+        return None
+
+
 async def _seek_or_none(api: AtlandexAPI, video_id: str, phrase: str) -> _Seek | None:
     if not phrase:
         return None
@@ -167,7 +184,7 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def _video_hit(row: dict[str, Any], site_url: str) -> VideoHit:
+def _video_hit(row: dict[str, Any], site_url: str, searchable: bool | None) -> VideoHit:
     video_id = str(row["videoid"])
     start = _int_or_none(row.get("seconds"))
     if start is not None:
@@ -180,6 +197,7 @@ def _video_hit(row: dict[str, Any], site_url: str) -> VideoHit:
         chapter_title=_clean(row.get("chapter_title")),
         start_sec=start,
         timestamp=format_timestamp(start) if start is not None else None,
+        searchable=searchable,
         youtube_url=youtube_url(video_id, start),
         atlandex_url=atlandex_url(site_url, video_id, start),
     )
@@ -218,7 +236,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> FindVideosResult:
         """Find indexed videos where a named concept, person, product or technology comes up, with the chapter and time where it is discussed.
 
-        Matches Atlandex's extracted index terms exactly (case-insensitive), so pass a short canonical term such as "reciprocal rank fusion" or "Kubernetes", never a question or a sentence. If nothing matches, retry once with a shorter or more common form. Then call search_video on a result to read what is actually said.
+        Matches Atlandex's extracted index terms exactly (case-insensitive), so pass a short canonical term such as "reciprocal rank fusion" or "Kubernetes", never a question or a sentence. If nothing matches, retry once with a shorter or more common form. Each video has a searchable flag: call search_video only on videos where it is true, to read what is actually said. For the others (false) cite the chapter link or use locate_quote; null means the check failed, so try search_video once.
         """
         term = " ".join(term.split())
         if not term:
@@ -230,10 +248,13 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
             raise ToolError(_agent_message(exc)) from exc
 
         rows = [r for r in data.get("results") or [] if isinstance(r, dict) and r.get("videoid")]
+        shown = rows[:limit]
+        ids = list(dict.fromkeys(str(r["videoid"]) for r in shown))
+        flags = dict(zip(ids, await asyncio.gather(*(_searchable_or_none(api, i) for i in ids))))
         return FindVideosResult(
             term=term,
             total_matches=len(rows),
-            videos=[_video_hit(r, settings.site_url) for r in rows[:limit]],
+            videos=[_video_hit(r, settings.site_url, flags[str(r["videoid"])]) for r in shown],
             hint=None
             if rows
             else (
@@ -250,7 +271,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> SearchVideoResult:
         """Search one indexed video's transcript for the passages that answer a question, each with a link to the moment it is said.
 
-        Passages are ranked by semantic similarity to the question. Cite the youtube_url of every passage you rely on. A passage with no start_sec could not be located in the captions; cite the plain video link for it. Fails for videos that are not indexed in Atlandex; use find_videos to find indexed ones.
+        Passages are ranked by semantic similarity to the question. Cite the youtube_url of every passage you rely on. A passage with no start_sec could not be located in the captions; cite the plain video link for it. Works only on videos with a searchable transcript (find_videos marks them searchable). If it says a video has no searchable transcript, do not retry it: cite the chapter link or use locate_quote.
         """
         video_id = _video_id(video)
         question = " ".join(question.split())
@@ -260,9 +281,14 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
         try:
             data = await api.query_video(video_id, question, top_k)
         except NotIndexed as exc:
+            raise ToolError(_no_transcript_message(video_id)) from exc
+        except ServerError as exc:
+            # A 5xx on a video without embeddings is a missing transcript, not an outage.
+            if await _searchable_or_none(api, video_id) is False:
+                raise ToolError(_no_transcript_message(video_id)) from exc
             raise ToolError(
-                f"Video {video_id} is not indexed in Atlandex, so its transcript cannot be searched. "
-                "Use find_videos to find indexed videos on this topic."
+                "Atlandex failed searching this video; retry once, then tell the user this video "
+                "can't be searched right now."
             ) from exc
         except AtlandexError as exc:
             raise ToolError(_agent_message(exc)) from exc

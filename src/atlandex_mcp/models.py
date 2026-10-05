@@ -18,6 +18,11 @@ class VideoHit(BaseModel):
     chapter_title: str | None = Field(default=None, description="Chapter where the term comes up.")
     start_sec: int | None = Field(default=None, description="Start of that chapter, in seconds.")
     timestamp: str | None = Field(default=None, description="start_sec as m:ss or h:mm:ss.")
+    searchable: bool | None = Field(
+        default=None,
+        description="True if search_video can read this video's transcript; false if it has no "
+        "searchable transcript; null if the check failed.",
+    )
     youtube_url: str = Field(description="Link to the video, at start_sec when known.")
     atlandex_url: str = Field(description="Atlandex page for the video, at start_sec when known.")
 

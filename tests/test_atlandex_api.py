@@ -8,6 +8,7 @@ from atlandex_mcp.atlandex_api import (
     BackendRejected,
     NotIndexed,
     RateLimited,
+    ServerError,
     Unavailable,
 )
 
@@ -68,6 +69,50 @@ async def test_query_error_mapping(status, body, error, message_part):
     await api.aclose()
     assert message_part in str(excinfo.value)
     assert "password" not in str(excinfo.value)
+
+
+async def test_query_5xx_is_a_server_error_but_a_timeout_is_not():
+    fake = FakeBackend()
+    fake.query_status = 500
+    fake.query_payload = {"error": "Internal server error"}
+    api = fake.api()
+    with pytest.raises(ServerError):
+        await api.query_video(VIDEO_ID, "q", 3)
+    await api.aclose()
+
+    def timeout(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    api = AtlandexAPI(API_URL, transport=httpx.MockTransport(timeout))
+    with pytest.raises(Unavailable) as excinfo:
+        await api.query_video(VIDEO_ID, "q", 3)
+    await api.aclose()
+    assert not isinstance(excinfo.value, ServerError)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"has_embeddings": True}, True),
+        ({"has_embeddings": False}, False),
+        ({"videoid": "x"}, None),
+        ({"has_embeddings": "yes"}, None),
+    ],
+)
+async def test_embeddings_ready_reads_a_boolean_or_none(payload, expected):
+    api = AtlandexAPI(API_URL, transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload)))
+    assert await api.embeddings_ready(VIDEO_ID) == expected
+    await api.aclose()
+
+
+async def test_embeddings_ready_request_shape():
+    fake = FakeBackend()
+    api = fake.api()
+    await api.embeddings_ready(VIDEO_ID)
+    await api.aclose()
+    (request,) = fake.requests
+    assert request.method == "GET"
+    assert str(request.url) == f"{API_URL}/yt_videos/{VIDEO_ID}/embeddings_ready"
 
 
 async def test_seek_caption_failure_keeps_the_backend_message():

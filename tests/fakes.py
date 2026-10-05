@@ -138,12 +138,22 @@ class FakeBackend:
         self.term_status = 200
         self.term_payload: Any = term_body()
         self.seek: Callable[[str], tuple[int, Any]] = default_seek
+        # Videos absent from `ready` are searchable. `ready_status` overrides every check.
+        self.ready: dict[str, bool] = {}
+        self.ready_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         path = request.url.path
         if path.startswith("/api/yt_videos/") and path.endswith("/query"):
             return httpx.Response(self.query_status, json=self.query_payload)
+        if path.startswith("/api/yt_videos/") and path.endswith("/embeddings_ready"):
+            video_id = path.split("/")[-2]
+            if self.ready_status != 200:
+                return httpx.Response(self.ready_status, json={"error": "Internal server error"})
+            return httpx.Response(
+                200, json={"has_embeddings": self.ready.get(video_id, True), "videoid": video_id}
+            )
         if path == "/api/snippet-seek":
             status, payload = self.seek(json.loads(request.content)["query"])
             return httpx.Response(status, json=payload)

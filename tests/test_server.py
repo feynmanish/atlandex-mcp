@@ -3,14 +3,17 @@ which talks to a fake Atlandex backend over a mocked HTTP transport."""
 
 import json
 
+import httpx
 import pytest
 from mcp import Client
 
+from atlandex_mcp.atlandex_api import AtlandexAPI
 from atlandex_mcp.passages import select_passage
 from atlandex_mcp.server import create_server
 from atlandex_mcp.youtube import format_timestamp
 
 from fakes import (
+    API_URL,
     CHUNK_EVAL,
     CHUNK_INTRO,
     SETTINGS,
@@ -24,6 +27,15 @@ from fakes import (
 pytestmark = pytest.mark.anyio
 
 QUESTION = "Why did dense retrieval lose to TF-IDF?"
+NO_TRANSCRIPT = (
+    f"Video {VIDEO_ID} has no searchable transcript in Atlandex. Do not retry search_video on "
+    "it. Cite the chapter link you already have for it, or use locate_quote to time a "
+    "specific phrase from its captions."
+)
+QUERY_FAILED = (
+    "Atlandex failed searching this video; retry once, then tell the user this video "
+    "can't be searched right now."
+)
 
 
 async def call(fake: FakeBackend, tool: str, arguments: dict):
@@ -115,15 +127,17 @@ async def test_unmatched_passage_has_no_timestamp_but_others_keep_theirs():
     assert data["note"] is not None
 
 
-async def test_unindexed_video_points_the_agent_to_find_videos():
+async def test_video_without_embeddings_is_not_retried_and_does_not_loop_to_find_videos():
     fake = FakeBackend()
     fake.query_status = 404
     fake.query_payload = {"error": "No embeddings found for this video"}
     result = await call(fake, "search_video", {"video": VIDEO_ID, "question": QUESTION})
     assert result.is_error is True
     text = result.content[0].text
-    assert "not indexed" in text and "find_videos" in text
+    assert NO_TRANSCRIPT in text
+    assert "find_videos" not in text
     assert fake.requests_to("/snippet-seek") == []
+    assert fake.requests_to("/embeddings_ready") == []
 
 
 @pytest.mark.parametrize(
@@ -133,7 +147,7 @@ async def test_unindexed_video_points_the_agent_to_find_videos():
         (
             500,
             {"error": "Database query failed: password authentication failed for user app"},
-            "did not respond properly (HTTP 500)",
+            "failed searching this video",
             "password",
         ),
     ],
@@ -148,6 +162,42 @@ async def test_backend_failures_become_actionable_errors(status, payload, expect
     assert expected in text
     if absent:
         assert absent not in text
+
+
+async def test_query_5xx_on_a_video_without_embeddings_is_a_missing_transcript():
+    fake = FakeBackend()
+    fake.query_status = 500
+    fake.query_payload = {"error": "Internal server error"}
+    fake.ready[VIDEO_ID] = False
+    result = await call(fake, "search_video", {"video": VIDEO_ID, "question": QUESTION})
+    assert result.is_error is True
+    assert NO_TRANSCRIPT in result.content[0].text
+    assert [r.method for r in fake.requests_to("/embeddings_ready")] == ["GET"]
+
+
+@pytest.mark.parametrize("ready_status", [200, 500])
+async def test_query_5xx_with_embeddings_or_unknown_readiness_asks_for_one_retry(ready_status):
+    fake = FakeBackend()
+    fake.query_status = 500
+    fake.query_payload = {"error": "Internal server error"}
+    fake.ready_status = ready_status  # 200: has_embeddings is true; 500: the check itself fails
+    result = await call(fake, "search_video", {"video": VIDEO_ID, "question": QUESTION})
+    assert result.is_error is True
+    text = result.content[0].text
+    assert QUERY_FAILED in text
+    assert "backend" not in text.lower()
+
+
+async def test_query_timeout_still_reports_the_backend_as_unavailable():
+    def timeout(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    api = AtlandexAPI(API_URL, transport=httpx.MockTransport(timeout))
+    async with Client(create_server(settings=SETTINGS, api=api)) as client:
+        result = await client.call_tool("search_video", {"video": VIDEO_ID, "question": QUESTION})
+    await api.aclose()
+    assert result.is_error is True
+    assert "backend is unavailable" in result.content[0].text
 
 
 async def test_rejects_invalid_video_before_calling_the_backend():
@@ -177,6 +227,35 @@ async def test_find_videos_returns_timestamped_hits():
     assert (second["relevance"], second["chapter_title"], second["timestamp"]) == (800, "Fusion", "1:02:05")
     assert second["youtube_url"] == "https://www.youtube.com/watch?v=ZyXwVuTsRqP&t=3725s"
     assert data["hint"] is None
+
+
+async def test_find_videos_flags_which_videos_are_searchable():
+    fake = FakeBackend()
+    fake.ready["ZyXwVuTsRqP"] = False
+    data = (await call(fake, "find_videos", {"term": "rrf"})).structured_content
+    assert [v["searchable"] for v in data["videos"]] == [True, False, True]
+    checked = sorted(r.url.path for r in fake.requests_to("/embeddings_ready"))
+    assert checked == [
+        "/api/yt_videos/AbCdEfGhIjK/embeddings_ready",
+        "/api/yt_videos/MnOpQrStUvW/embeddings_ready",
+        "/api/yt_videos/ZyXwVuTsRqP/embeddings_ready",
+    ]
+
+
+async def test_find_videos_checks_only_the_videos_it_returns():
+    fake = FakeBackend()
+    await call(fake, "find_videos", {"term": "rrf", "limit": 1})
+    assert len(fake.requests_to("/embeddings_ready")) == 1
+
+
+async def test_find_videos_searchable_is_null_when_the_check_fails():
+    fake = FakeBackend()
+    fake.ready_status = 500
+    result = await call(fake, "find_videos", {"term": "rrf"})
+    assert result.is_error is False
+    data = result.structured_content
+    assert [v["searchable"] for v in data["videos"]] == [None, None, None]
+    assert data["total_matches"] == 3
 
 
 async def test_find_videos_handles_rows_without_a_chapter():

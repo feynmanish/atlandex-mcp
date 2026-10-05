@@ -1,8 +1,9 @@
-"""Async client for the three Atlandex backend routes this server uses.
+"""Async client for the Atlandex backend routes this server uses.
 
-- GET  /api/term/<term>                  cross-channel lookup of an extracted index term
-- POST /api/yt_videos/<video_id>/query   dense retrieval over one video's transcript chunks
-- POST /api/snippet-seek                 caption match for a phrase -> start_sec
+- GET  /api/term/<term>                          cross-channel lookup of an extracted index term
+- GET  /api/yt_videos/<video_id>/embeddings_ready  whether the video's transcript is searchable
+- POST /api/yt_videos/<video_id>/query           dense retrieval over one video's transcript chunks
+- POST /api/snippet-seek                         caption match for a phrase -> start_sec
 
 The server only reads. It never calls routes that write, ingest or bill an LLM completion:
 queries are sent with retrieve_only, so the backend embeds the question and skips its own
@@ -36,6 +37,10 @@ class RateLimited(AtlandexError):
 
 class Unavailable(AtlandexError):
     """Timeout, connection failure, 5xx without a usable message, or a non-JSON body."""
+
+
+class ServerError(Unavailable):
+    """The route answered 5xx. Unlike a timeout, the backend is up and this one request failed."""
 
 
 class BackendRejected(AtlandexError):
@@ -88,6 +93,12 @@ class AtlandexAPI:
             not_found=NotIndexed(f"video {video_id} is not indexed"),
         )
 
+    async def embeddings_ready(self, video_id: str) -> bool | None:
+        """Whether the video has transcript embeddings; None if the answer is not a boolean."""
+        data = await self._request("GET", f"yt_videos/{quote(video_id, safe='')}/embeddings_ready")
+        ready = data.get("has_embeddings")
+        return ready if isinstance(ready, bool) else None
+
     async def snippet_seek(self, video_id: str, phrase: str) -> dict[str, Any]:
         return await self._request("POST", "snippet-seek", json={"video_id": video_id, "query": phrase})
 
@@ -127,7 +138,7 @@ class AtlandexAPI:
             # errors, which stay out of the agent's context.
             if isinstance(data, dict) and data.get("status") == "error" and message:
                 raise BackendRejected(message)
-            raise Unavailable(f"HTTP {status}")
+            raise ServerError(f"HTTP {status}")
         if status >= 400:
             raise BackendRejected(message or f"HTTP {status}")
         if not isinstance(data, dict):

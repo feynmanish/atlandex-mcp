@@ -6,11 +6,13 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI agents search the 
 
 | Tool | What it returns | Atlandex route |
 |---|---|---|
-| `find_videos(term, limit, channel_id)` | Indexed videos where a concept, person or technology comes up, with the chapter and time | `GET /api/term/<term>` |
+| `find_videos(term, limit, channel_id)` | Indexed videos where a concept, person or technology comes up, with the chapter and time, and a `searchable` flag saying whether `search_video` can read the video | `GET /api/term/<term>`, then `GET /api/yt_videos/<id>/embeddings_ready` per video |
 | `search_video(video, question, top_k)` | The passages of one video that answer a question, each with a timestamped link | `POST /api/yt_videos/<id>/query`, then `POST /api/snippet-seek` per passage |
 | `locate_quote(video, phrase)` | When a phrase is spoken, as a timestamped link | `POST /api/snippet-seek` |
 
 `video` accepts a YouTube URL, an Atlandex `/v/` link or a bare video ID. All three tools are read-only.
+
+`searchable` is `true` when the video has transcript embeddings, `false` when it is in the term index but has no searchable transcript, and `null` when the check failed. For `false` videos the agent cites the chapter link or uses `locate_quote`.
 
 ## How a search works
 
@@ -75,7 +77,7 @@ Any other MCP client works the same way: it launches `atlandex-mcp` and talks to
 - **Passages, not chunks.** Full chunks would put about 25,000 characters into context for three hits. One passage per chunk keeps a search near 3,000 characters and leaves room for the agent to compare videos.
 - **Timestamps resolved in the server.** The agent gets citable links in one call instead of having to remember a second lookup per passage. The cost is one caption seek per passage, run in parallel.
 - **Three narrow, read-only tools.** Each tool maps onto existing routes and carries `readOnlyHint` and `idempotentHint`, so clients can safely approve them without prompting. The server never calls routes that write, ingest or generate a completion.
-- **Errors written for the model.** Anticipated failures say what to do next: an unindexed video points to `find_videos`, a rate limit says to wait and use what is already retrieved, and a response that isn't the backend's JSON points to `ATLANDEX_API_URL`. Backend 5xx bodies are not passed through, because they can contain database errors. The one exception is the caption seek's own error message.
+- **Errors written for the model.** Anticipated failures say what to do next: a video with no searchable transcript says not to retry it and to cite the chapter link or use `locate_quote` (it does not point back to `find_videos`, which would list the same video again), a rate limit says to wait and use what is already retrieved, and a response that isn't the backend's JSON points to `ATLANDEX_API_URL`. When the query route answers 5xx, the server asks `embeddings_ready`: `false` gets the no-transcript message, anything else gets "retry once, then tell the user this video can't be searched right now". Only a timeout or connection failure is reported as the backend being unavailable. Backend 5xx bodies are not passed through, because they can contain database errors. The one exception is the caption seek's own error message.
 - **No backend changes.** The server works against the API as deployed.
 - **Backend URL from the environment only.** The caption-seek route is unmetered and triggers proxied caption fetches, so this public repo does not ship a default URL anyone could point at it.
 - **stdio first.** Remote deployment over Streamable HTTP with authentication is the next step.
@@ -102,11 +104,13 @@ Run ten real questions through Claude Code and look for:
 2. **Search terms.** Short terms find matches. Whole questions passed to `find_videos` return nothing.
 3. **Citations.** Every claim should carry a `youtube_url`. When `start_sec` is null, the link should have no timestamp.
 4. **Timestamp accuracy.** Open three links and note how far before the line each one lands (see limits below).
-5. **Recovery.** Ask about a video that isn't indexed. The agent should switch to `find_videos`.
+5. **Recovery.** Ask `search_video` about a video with no searchable transcript. The agent should not retry it, and should cite the chapter link or use `locate_quote`.
+6. **Searchable flag.** `find_videos` results marked `searchable: false` should not be passed to `search_video`.
 
 Fix what goes wrong in the tool descriptions first. They are what the model reads.
 
 ## Known limits
 
 - **Search scope.** Semantic search works within one video. Discovery across videos matches extracted index terms exactly. Searching the whole corpus by meaning would need a new backend route.
+- **Term index and transcript index differ.** `find_videos` matches the term index, which can include videos that have no transcript embeddings. They come back with `searchable: false`: `search_video` cannot read them, so you get the chapter link and `locate_quote`. `embeddings_ready` can report `true` for a video whose query route still answers 500 (seen with an ID Atlandex has not ingested), so `searchable: true` is not a guarantee: `search_video` can still fail on it with a retry-once message.
 - **Timestamp precision.** The caption seek returns the start of the earliest 45-second caption window that contains the phrase, minus 10 seconds of lead-in. Links can therefore land up to about a minute before the line.
