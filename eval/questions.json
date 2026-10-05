@@ -1,0 +1,12 @@
+[
+  {"id": 1, "kind": "topic", "q": "What do AI experts say about whether today's large language models can get us to human-level intelligence?"},
+  {"id": 2, "kind": "topic", "q": "How did Nvidia end up betting the company on CUDA, and what did it cost them?"},
+  {"id": 3, "kind": "topic", "q": "What are programmers saying about how AI coding tools are changing software development?"},
+  {"id": 4, "kind": "video", "q": "https://www.youtube.com/watch?v=IHZwWFHWa-w What does this video say about how a neural network actually learns?"},
+  {"id": 5, "kind": "video", "q": "https://www.youtube.com/watch?v=ketW8xsL-ig Why does the speaker think AGI is far away?"},
+  {"id": 6, "kind": "video", "q": "https://www.youtube.com/watch?v=X_ZVSPcZhtw What does he say about why self-play worked for AlphaGo?"},
+  {"id": 7, "kind": "where", "q": "In https://www.youtube.com/watch?v=ZUSPpDBEfmQ where does Jensen Huang say they decided to put CUDA on GeForce? I want to jump to that moment."},
+  {"id": 8, "kind": "where", "q": "At what point in https://www.youtube.com/watch?v=aircAruvnKk does he say the sigmoid function squishes the real number line into the range between 0 and 1?"},
+  {"id": 9, "kind": "no-transcript", "q": "https://www.youtube.com/watch?v=vIRiUUtSggM What does the lecturer say about the hype cycle and skepticism around generative AI?"},
+  {"id": 10, "kind": "long-term", "q": "I want to learn how retrieval-augmented generation pipelines are built. What do the videos you can look up say about it?"}
+]

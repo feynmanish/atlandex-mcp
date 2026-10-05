@@ -236,7 +236,7 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
     ) -> FindVideosResult:
         """Find indexed videos where a named concept, person, product or technology comes up, with the chapter and time where it is discussed.
 
-        Matches Atlandex's extracted index terms exactly (case-insensitive), so pass a short canonical term such as "reciprocal rank fusion" or "Kubernetes", never a question or a sentence. If nothing matches, retry once with a shorter or more common form. Each video has a searchable flag: call search_video only on videos where it is true, to read what is actually said. For the others (false) cite the chapter link or use locate_quote; null means the check failed, so try search_video once.
+        Matches Atlandex's extracted index terms exactly (case-insensitive), so pass a short canonical term such as "reinforcement learning" or "Nvidia", never a question or a sentence. Punctuation counts: "self-supervised learning" and "self supervised learning" are different terms. If nothing matches, retry once with a shorter, more common or differently hyphenated form, then say nothing indexed covers it. Each video has a searchable flag: call search_video only on videos where it is true, to read what is actually said. For the others (false) cite the chapter link or use locate_quote; null means the check failed, so try search_video once.
         """
         term = " ".join(term.split())
         if not term:
@@ -258,8 +258,9 @@ def create_server(settings: Settings | None = None, api: AtlandexAPI | None = No
             hint=None
             if rows
             else (
-                "No indexed video has this exact term. Retry with a shorter or more common form "
-                "(for example 'RAG' rather than 'retrieval-augmented generation pipelines')."
+                "No indexed video has this exact term. Retry once with a shorter or more common form, "
+                "or with the hyphens added or removed (for example 'retrieval augmented generation' "
+                "rather than 'retrieval-augmented generation pipelines')."
             ),
         )
 
